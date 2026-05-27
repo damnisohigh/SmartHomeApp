@@ -1,5 +1,4 @@
 import Foundation
-import FirebaseAuth
 import FirebaseCore
 import FirebaseDatabase
 
@@ -71,6 +70,8 @@ struct FirebaseCloudService: CloudService {
             "\(devicePath)/room": device.room,
             "\(devicePath)/kind": device.kind.rawValue,
             "\(devicePath)/isOn": turnOn,
+            "\(devicePath)/value": device.value,
+            "\(devicePath)/unit": device.unit,
             "\(devicePath)/updatedAt": ServerValue.timestamp()
         ]
 
@@ -81,6 +82,15 @@ struct FirebaseCloudService: CloudService {
             result: result.message(success: "Команду \(command) записано у Firebase"),
             isSuccessful: result.isSuccessful
         )
+    }
+
+    func sendDeviceValue(_ device: SmartDevice) async {
+        let devicePath = "devices/\(device.id.uuidString)"
+        _ = await updateChildren([
+            "\(devicePath)/value": device.value,
+            "\(devicePath)/isOn": device.isOn,
+            "\(devicePath)/updatedAt": ServerValue.timestamp()
+        ])
     }
 
     func sendTelemetry(_ sensor: SensorSnapshot) async -> CloudDeliveryResult {
@@ -114,36 +124,17 @@ struct FirebaseCloudService: CloudService {
     }
 
     private func updateChildren(_ values: [String: Any]) async -> FirebaseWriteResult {
-        let authWarning = await authenticateIfAvailable()
-
-        return await withCheckedContinuation { (continuation: CheckedContinuation<FirebaseWriteResult, Never>) in
-            database.updateChildValues(values) { error, _ in
+        await withCheckedContinuation { continuation in
+            database.updateChildValues(values) { error, ref in
                 if let error {
-                    let details = [authWarning, "Firebase write error: \(error.localizedDescription)"]
-                        .compactMap { $0 }
-                        .joined(separator: " | ")
-                    continuation.resume(returning: .failure(details))
+                    print("[Firebase] WRITE FAILED: \(error.localizedDescription)")
+                    continuation.resume(returning: .failure("Firebase write error: \(error.localizedDescription)"))
                 } else {
+                    print("[Firebase] Write OK — \(ref.url)")
                     continuation.resume(returning: .success)
                 }
             }
         }
-    }
-
-    private func authenticateIfAvailable() async -> String? {
-        if Auth.auth().currentUser != nil {
-            return nil
-        }
-
-        return await withCheckedContinuation { (continuation: CheckedContinuation<FirebaseWriteResult, Never>) in
-            Auth.auth().signInAnonymously { _, error in
-                if let error {
-                    continuation.resume(returning: .failure("Firebase Auth error: \(error.localizedDescription)"))
-                } else {
-                    continuation.resume(returning: .success)
-                }
-            }
-        }.errorMessage
     }
 }
 
@@ -156,13 +147,6 @@ private enum FirebaseWriteResult: Equatable {
             return true
         }
         return false
-    }
-
-    var errorMessage: String? {
-        if case let .failure(message) = self {
-            return message
-        }
-        return nil
     }
 
     func message(success: String) -> String {

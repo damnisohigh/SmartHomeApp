@@ -25,7 +25,7 @@ struct ContentView: View {
 
             Esp32SimulatorView()
                 .tabItem {
-                    Label("ESP32", systemImage: "cpu.fill")
+                    Label("Контролер", systemImage: "cpu.fill")
                 }
         }
     }
@@ -77,9 +77,9 @@ struct HeaderCard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Система керування")
+                    Text("Розумний будинок")
                         .font(.title2.bold())
-                    Text("Демо без фізичного ESP32: датчики та реле симулюються у застосунку.")
+                    Text("Керування пристроями та моніторинг")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -234,7 +234,7 @@ struct CloudView: View {
                                 .foregroundStyle(.blue)
 
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Cloud Control Layer")
+                                Text("Хмарне керування")
                                     .font(.title2.bold())
                                 Text("Firebase Realtime Database")
                                     .font(.subheadline)
@@ -245,16 +245,16 @@ struct CloudView: View {
                         CloudRouteView()
 
                         HStack {
-                            Label(store.cloudMode.rawValue, systemImage: "checkmark.seal.fill")
+                            Label(store.cloudMode.rawValue, systemImage: store.lastFirebaseError == nil ? "checkmark.seal.fill" : "xmark.seal.fill")
                                 .font(.subheadline.bold())
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(store.lastFirebaseError == nil ? .blue : .red)
                             Spacer()
-                            Text("offline demo")
+                            Text(store.lastFirebaseError == nil ? "підключено" : "помилка з'єднання")
                                 .font(.caption.bold())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(store.lastFirebaseError == nil ? Color.secondary : Color.red)
                         }
 
-                        Text("Поточний режим записує команди й телеметрію у Firebase Realtime Database. ESP32 поки симулюється локально, тому фізичне реле не перемикається без окремої прошивки контролера.")
+                        Text("Команди та телеметрія записуються у Firebase Realtime Database в реальному часі.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -281,14 +281,49 @@ struct CloudView: View {
 struct FirebaseSetupCard: View {
     @EnvironmentObject private var store: SmartHomeStore
 
+    private var isConnected: Bool { store.lastFirebaseError == nil && store.commandLog.first?.isSuccessful == true }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label("Firebase Console", systemImage: "checklist")
                     .font(.headline)
                 Spacer()
-                Image(systemName: store.commandLog.first?.isSuccessful == true ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(store.commandLog.first?.isSuccessful == true ? .green : .orange)
+                Image(systemName: isConnected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(isConnected ? .green : .orange)
+            }
+
+            if let error = store.lastFirebaseError {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Помилка запису")
+                        .font(.caption.bold())
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Як виправити:")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    Text("1. Firebase Console → Authentication → Sign-in method → увімкни Anonymous")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("2. Realtime Database → Rules → { \".read\": true, \".write\": true }")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
 
             FirebaseInfoRow(title: "Project", value: store.firebaseSetup.projectID)
@@ -297,11 +332,10 @@ struct FirebaseSetupCard: View {
 
             Divider()
 
-            FirebaseInfoRow(title: "Console", value: "Realtime Database -> Data")
             FirebaseInfoRow(title: "Nodes", value: "telemetry/current, telemetry/history, commands, devices")
-            FirebaseInfoRow(title: "Rules", value: "Enable Anonymous Auth or allow demo writes")
 
             Button {
+                store.lastFirebaseError = nil
                 store.syncInitialCloudState()
             } label: {
                 Label("Повторити sync", systemImage: "arrow.clockwise")
@@ -356,7 +390,7 @@ struct Esp32SimulatorView: View {
                             }
                         }
 
-                        Text("У реальному проєкті ESP32 надсилає температуру, вологість, рух і керує реле через MQTT/Cloud DB. У цьому демо ті самі пакети й підтвердження реле генеруються локально, тому застосунок можна показати без плати.")
+                        Text("Контролер збирає дані з датчиків температури, вологості та руху і керує реле через хмарну базу даних.")
                             .font(.body)
                             .foregroundStyle(.secondary)
 
@@ -373,12 +407,12 @@ struct Esp32SimulatorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                     SectionTitle("Останній пакет")
-                    Text(store.lastPacket)
-                        .font(.system(.body, design: .monospaced))
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        SensorTile(title: "Температура", value: String(format: "%.1f°C", store.sensor.temperature), symbol: "thermometer.medium", tint: .red)
+                        SensorTile(title: "Вологість", value: "\(Int(store.sensor.humidity))%", symbol: "humidity.fill", tint: .cyan)
+                        SensorTile(title: "Рух", value: store.sensor.motionDetected ? "Виявлено" : "Немає", symbol: "figure.walk", tint: store.sensor.motionDetected ? .orange : .secondary)
+                        SensorTile(title: "Контролер", value: store.isEsp32Online ? "Онлайн" : "Офлайн", symbol: "cpu.fill", tint: store.isEsp32Online ? .green : .orange)
+                    }
 
                     SectionTitle("Модель підключення")
                     VStack(alignment: .leading, spacing: 10) {
@@ -525,9 +559,9 @@ struct DeviceRow: View {
 
             Spacer()
 
-            Text(device.unit.isEmpty ? "ON" : "\(Int(device.value))\(device.unit)")
+            Text(device.kind == .lock ? (device.isOn ? "Замкнено" : "Відкрито") : (device.unit.isEmpty ? "ON" : "\(Int(device.value))\(device.unit)"))
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(device.kind == .lock ? (device.isOn ? .green : .orange) : .secondary)
         }
         .padding()
         .background(Color(.secondarySystemGroupedBackground))
@@ -582,9 +616,9 @@ struct DeviceControlRow: View {
 
                 Spacer()
 
-                Text(store.pendingCommandDeviceID == device.id ? "SYNC" : (device.isOn ? "ON" : "OFF"))
+                Text(store.pendingCommandDeviceID == device.id ? "SYNC" : deviceStatusLabel(device))
                     .font(.caption.bold())
-                    .foregroundStyle(device.isOn ? .green : .secondary)
+                    .foregroundStyle(deviceStatusColor(device))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(Color(.tertiarySystemGroupedBackground))
@@ -597,10 +631,6 @@ struct DeviceControlRow: View {
                 .labelsHidden()
             }
 
-            Text(store.pendingCommandDeviceID == device.id ? "Команда в хмарі, очікується відповідь ESP32-SIM..." : "Маршрут: iOS -> Cloud DB -> MQTT -> ESP32-SIM -> реле")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             if device.kind == .light || device.kind == .fan || device.kind == .thermostat {
                 Slider(
                     value: Binding(
@@ -610,13 +640,36 @@ struct DeviceControlRow: View {
                     in: device.kind == .thermostat ? 16...28 : 0...100
                 )
 
-                Text("\(device.kind == .thermostat ? "Значення" : "Потужність"): \(String(format: "%.0f", device.value))\(device.unit)")
+                Text(sliderLabel(for: device))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 4)
         .animation(.easeInOut(duration: 0.2), value: device.isOn)
+    }
+
+    private func deviceStatusLabel(_ device: SmartDevice) -> String {
+        switch device.kind {
+        case .lock: return device.isOn ? "Замкнено" : "Відкрито"
+        default: return device.isOn ? "ON" : "OFF"
+        }
+    }
+
+    private func deviceStatusColor(_ device: SmartDevice) -> Color {
+        switch device.kind {
+        case .lock: return device.isOn ? .green : .orange
+        default: return device.isOn ? .green : .secondary
+        }
+    }
+
+    private func sliderLabel(for device: SmartDevice) -> String {
+        switch device.kind {
+        case .thermostat: return "Ціль: \(String(format: "%.0f", device.value))°C"
+        case .fan: return "Швидкість: \(String(format: "%.0f", device.value))%"
+        case .light: return "Яскравість: \(String(format: "%.0f", device.value))%"
+        default: return "\(String(format: "%.0f", device.value))\(device.unit)"
+        }
     }
 }
 
@@ -636,7 +689,7 @@ struct CloudRouteView: View {
                 CloudRouteNode(symbol: "switch.2", title: "Relay")
             }
 
-            Text("Коли натискаєш ON/OFF, команда потрапляє у хмарну базу, передається через MQTT до контролера, а підтвердження повертається назад у застосунок.")
+            Text("Команди від застосунку надходять у хмару та виконуються контролером у реальному часі.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -667,27 +720,25 @@ struct CloudCommandRow: View {
     let command: CloudCommand
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: command.isSuccessful ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(command.isSuccessful ? .green : .orange)
+        HStack(spacing: 12) {
+            Image(systemName: command.isSuccessful ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(command.isSuccessful ? .green : .orange)
+                .font(.title3)
 
+            VStack(alignment: .leading, spacing: 3) {
                 Text(command.title)
                     .font(.headline)
-
-                Spacer()
-
-                Text(command.time)
-                    .font(.caption.monospacedDigit())
+                Text(command.result)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
-            Text(command.route)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Spacer()
 
-            Text(command.result)
-                .font(.subheadline.weight(.semibold))
+            Text(command.time)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
         .padding()
         .background(Color(.secondarySystemGroupedBackground))
@@ -732,6 +783,32 @@ struct AutomationRow: View {
             .disabled(!automation.isEnabled)
         }
         .padding(.vertical, 6)
+    }
+}
+
+struct SensorTile: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(tint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.headline)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

@@ -15,6 +15,7 @@ final class SmartHomeStore: ObservableObject {
     @Published var cloudMode: CloudMode = .simulated
     @Published var isAutoSimulationEnabled = true
     @Published var commandLog: [CloudCommand] = []
+    @Published var lastFirebaseError: String?
     @Published var firebaseSetup = FirebaseSetupInfo(
         projectID: "unknown",
         databaseURL: "missing DATABASE_URL",
@@ -56,38 +57,45 @@ final class SmartHomeStore: ObservableObject {
 
     func sendCloudCommand(to device: SmartDevice, turnOn: Bool) {
         guard let index = devices.firstIndex(of: device) else { return }
+
+        // Heater and AC are mutually exclusive
+        if device.kind == .heater && turnOn {
+            if let i = devices.firstIndex(where: { $0.kind == .airConditioner }) { devices[i].isOn = false }
+        }
+        if device.kind == .airConditioner && turnOn {
+            if let i = devices.firstIndex(where: { $0.kind == .heater }) { devices[i].isOn = false }
+        }
+
         let command = turnOn ? "ON" : "OFF"
         pendingCommandDeviceID = devices[index].id
         cloudStatus = "\(cloudMode.rawValue): queued \(device.name) \(command)"
         appendCommand(
             title: "\(device.name) \(command)",
-            route: cloudMode == .simulated ? "iOS -> Mock Cloud DB -> MQTT model -> ESP32-SIM" : "iOS -> HTTPS -> Cloud DB -> MQTT -> ESP32",
-            result: "Очікує підтвердження реле",
+            route: "iOS -> Cloud DB -> контролер -> реле",
+            result: "Очікує підтвердження",
             isSuccessful: true
         )
 
+        // Optimistic local update — UI reflects change instantly
+        devices[index].isOn = turnOn
+        if devices[index].kind == .socket { devices[index].value = turnOn ? 120 : 0 }
+
         Task { [weak self] in
             let delivery = await self?.cloudService.sendDeviceCommand(device: device, turnOn: turnOn)
-            guard let self, let currentIndex = self.devices.firstIndex(where: { $0.id == device.id }) else { return }
-            self.devices[currentIndex].isOn = turnOn
-
-            if self.devices[currentIndex].kind == .socket {
-                self.devices[currentIndex].value = turnOn ? 120 : 0
-            }
-
-            if self.devices[currentIndex].kind == .lock {
-                self.devices[currentIndex].value = turnOn ? 1 : 0
-            }
-
+            guard let self else { return }
             self.pendingCommandDeviceID = nil
             self.cloudStatus = "\(self.cloudMode.rawValue): synced \(device.name) \(command)"
             self.lastCloudSync = Self.clockString()
             self.refreshPacket()
+
+            let isOk = delivery?.isSuccessful == true
+            if isOk { self.lastFirebaseError = nil } else { self.lastFirebaseError = delivery?.result }
+
             self.appendCommand(
                 title: delivery?.title ?? "Cloud command failed",
                 route: delivery?.route ?? "iOS -> Cloud",
                 result: delivery?.result ?? "Немає відповіді від сервісу",
-                isSuccessful: delivery?.isSuccessful == true
+                isSuccessful: isOk
             )
         }
     }
@@ -95,6 +103,13 @@ final class SmartHomeStore: ObservableObject {
     func updateDeviceValue(_ device: SmartDevice, value: Double) {
         guard let index = devices.firstIndex(of: device) else { return }
         devices[index].value = value
+        if device.kind == .thermostat {
+            sensor.targetTemperature = value
+        }
+        let updated = devices[index]
+        Task { [weak self] in
+            await self?.cloudService.sendDeviceValue(updated)
+        }
     }
 
     func updateTargetTemperature(_ value: Double) {
@@ -176,12 +191,26 @@ final class SmartHomeStore: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let delivery = await self.cloudService.sendTelemetry(self.sensor)
+            let isOk = isEsp32Online && delivery.isSuccessful
+            if isOk { self.lastFirebaseError = nil } else { self.lastFirebaseError = delivery.result }
             self.appendCommand(
                 title: delivery.title,
                 route: delivery.route,
                 result: isEsp32Online ? delivery.result : "Пакет не доставлено",
-                isSuccessful: isEsp32Online && delivery.isSuccessful
+                isSuccessful: isOk
             )
+        }
+    }
+
+    var isClimateAutoEnabled: Bool {
+        automations.first { $0.name == "Клімат авто" }?.isEnabled == true
+    }
+
+    func toggleClimateAuto() {
+        guard let auto = automations.first(where: { $0.name == "Клімат авто" }) else { return }
+        toggleAutomation(auto)
+        if !isClimateAutoEnabled {
+            setClimateMode(nil)
         }
     }
 
@@ -196,6 +225,7 @@ final class SmartHomeStore: ObservableObject {
             let delivery = await self.cloudService.syncInitialState(devices: self.devices, sensor: self.sensor)
             self.cloudStatus = delivery.isSuccessful ? "\(self.cloudMode.rawValue): initial state synced" : "\(self.cloudMode.rawValue): initial sync failed"
             self.lastCloudSync = Self.clockString()
+            if delivery.isSuccessful { self.lastFirebaseError = nil } else { self.lastFirebaseError = delivery.result }
             self.appendCommand(
                 title: delivery.title,
                 route: delivery.route,

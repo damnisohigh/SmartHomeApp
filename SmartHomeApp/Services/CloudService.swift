@@ -4,11 +4,14 @@ protocol CloudService {
     var mode: CloudMode { get }
     func syncInitialState(devices: [SmartDevice], sensor: SensorSnapshot) async -> CloudDeliveryResult
     func sendDeviceCommand(device: SmartDevice, turnOn: Bool) async -> CloudDeliveryResult
+    func sendDeviceValue(_ device: SmartDevice) async
     func sendTelemetry(_ sensor: SensorSnapshot) async -> CloudDeliveryResult
 }
 
 struct MockCloudService: CloudService {
     let mode: CloudMode = .simulated
+
+    func sendDeviceValue(_ device: SmartDevice) async {}
 
     func syncInitialState(devices: [SmartDevice], sensor: SensorSnapshot) async -> CloudDeliveryResult {
         try? await Task.sleep(nanoseconds: 220_000_000)
@@ -46,6 +49,8 @@ struct HTTPCloudService: CloudService {
     let mode: CloudMode = .realHttp
     var endpoint: URL
     var apiKey: String
+
+    func sendDeviceValue(_ device: SmartDevice) async {}
 
     func syncInitialState(devices: [SmartDevice], sensor: SensorSnapshot) async -> CloudDeliveryResult {
         let payload: [String: Any] = [
